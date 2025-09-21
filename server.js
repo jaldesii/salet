@@ -6,27 +6,42 @@ import cors from 'cors';
 dotenv.config();
 
 const app = express();
-app.use(cors({ origin: 'http://localhost:5173' }));
+
+// ✅ Allow both localhost at Vercel app
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://salet-qey5.vercel.app'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin) || !origin) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
+}));
+
 app.use(express.json());
 
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const RAW_DATABASE_ID = process.env.NOTION_DATABASE_ID;
-const NOTION_DATABASE_ID = formatNotionId(RAW_DATABASE_ID);
 
 function formatNotionId(id) {
   if (!id) return null;
   const cleanId = id.replace(/-/g, '');
-  if (cleanId.length !== 32) return id; // Return original if not 32 chars
-  
+  if (cleanId.length !== 32) return id;
   return `${cleanId.substring(0, 8)}-${cleanId.substring(8, 12)}-${cleanId.substring(12, 16)}-${cleanId.substring(16, 20)}-${cleanId.substring(20)}`;
 }
 
-// Validate environment variables
+const NOTION_DATABASE_ID = formatNotionId(RAW_DATABASE_ID);
+
+// Validate env
 if (!NOTION_TOKEN) {
   console.error('❌ Missing NOTION_TOKEN in .env file');
   process.exit(1);
 }
-
 if (!NOTION_DATABASE_ID) {
   console.error('❌ Missing NOTION_DATABASE_ID in .env file');
   process.exit(1);
@@ -46,10 +61,8 @@ app.get('/proxy/debug', (req, res) => {
   });
 });
 
-// Test endpoint to verify database connection
+// Test Notion DB connection
 app.get('/proxy/test-database', async (req, res) => {
-  console.log('🧪 Testing database connection...');
-  
   try {
     const response = await axios.get(
       `https://api.notion.com/v1/databases/${NOTION_DATABASE_ID}`,
@@ -61,12 +74,8 @@ app.get('/proxy/test-database', async (req, res) => {
         }
       }
     );
-    
-    console.log('✅ Database connection successful!');
-    console.log('   Database Title:', response.data.title[0]?.plain_text || 'Unknown');
-    
-    res.json({ 
-      status: 'success', 
+    res.json({
+      status: 'success',
       message: 'Database connection successful',
       data: {
         title: response.data.title[0]?.plain_text,
@@ -75,8 +84,6 @@ app.get('/proxy/test-database', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Database test error:', error.response?.data || error.message);
-    
     res.status(error.response?.status || 500).json({
       status: 'error',
       message: error.response?.data?.message || 'Failed to access database',
@@ -85,69 +92,34 @@ app.get('/proxy/test-database', async (req, res) => {
   }
 });
 
-// Health check endpoint
+// Health check
 app.get('/proxy/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
+  res.json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
     databaseId: NOTION_DATABASE_ID,
     rawDatabaseId: RAW_DATABASE_ID
   });
 });
 
-// POST endpoint to create new database entries
+// Create page
 app.post('/proxy/notion', async (req, res) => {
-  console.log('📝 Received data for Notion:', req.body);
-  
   try {
     const { amount, customerName, productName, date, paymentMethod } = req.body;
-
-    // Validate required fields
     if (!amount || !customerName || !productName || !date || !paymentMethod) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Missing required fields'
-      });
+      return res.status(400).json({ status: 'error', message: 'Missing required fields' });
     }
 
     const notionData = {
       parent: { database_id: NOTION_DATABASE_ID },
       properties: {
-        'Amount': {
-          number: parseFloat(amount)
-        },
-        'Name': {
-          title: [
-            {
-              text: {
-                content: customerName
-              }
-            }
-          ]
-        },
-        'Product Name': {
-          rich_text: [
-            {
-              text: {
-                content: productName
-              }
-            }
-          ]
-        },
-        'Order Date': {
-          date: {
-            start: date
-          }
-        },
-        'Select': {
-          select: {
-            name: paymentMethod
-          }
-        }
+        'Amount': { number: parseFloat(amount) },
+        'Name': { title: [{ text: { content: customerName } }] },
+        'Product Name': { rich_text: [{ text: { content: productName } }] },
+        'Order Date': { date: { start: date } },
+        'Select': { select: { name: paymentMethod } }
       }
     };
-
-    console.log('📤 Sending to Notion API:', JSON.stringify(notionData, null, 2));
 
     const response = await axios.post(
       'https://api.notion.com/v1/pages',
@@ -161,17 +133,12 @@ app.post('/proxy/notion', async (req, res) => {
       }
     );
 
-    console.log('✅ Successfully created Notion page:', response.data.id);
-    
     res.json({
       status: 'success',
       message: 'Data successfully saved to Notion',
       pageId: response.data.id
     });
-
   } catch (error) {
-    console.error('❌ Notion API error:', error.response?.data || error.message);
-    
     res.status(error.response?.status || 500).json({
       status: 'error',
       message: error.response?.data?.message || 'Failed to create page in Notion',
@@ -180,21 +147,12 @@ app.post('/proxy/notion', async (req, res) => {
   }
 });
 
-// GET endpoint to fetch data from Notion
+// Fetch data
 app.get('/proxy/notion', async (req, res) => {
   try {
-    console.log('📥 Fetching data from Notion database...');
-    
     const response = await axios.post(
       `https://api.notion.com/v1/databases/${NOTION_DATABASE_ID}/query`,
-      {
-        sorts: [
-          {
-            property: 'Order Date',
-            direction: 'descending'
-          }
-        ]
-      },
+      { sorts: [{ property: 'Order Date', direction: 'descending' }] },
       {
         headers: {
           'Authorization': `Bearer ${NOTION_TOKEN}`,
@@ -205,9 +163,6 @@ app.get('/proxy/notion', async (req, res) => {
     );
 
     const rows = response.data.results;
-    console.log(`📊 Found ${rows.length} records in Notion`);
-
-    // Shape the data for frontend
     const monthly = [];
     const products = [];
     const orders = [];
@@ -219,7 +174,7 @@ app.get('/proxy/notion', async (req, res) => {
       const date = page.properties["Order Date"]?.date?.start || null;
       const paymentMethod = page.properties["Select"]?.select?.name || "Unknown";
 
-      // Monthly data
+      // Monthly
       if (date) {
         const month = new Date(date).toLocaleString("default", { month: "short", year: 'numeric' });
         const existing = monthly.find((m) => m.name === month);
@@ -228,16 +183,11 @@ app.get('/proxy/notion', async (req, res) => {
           existing.orders += 1;
           existing.customers += 1;
         } else {
-          monthly.push({ 
-            name: month, 
-            revenue: amount, 
-            orders: 1, 
-            customers: 1 
-          });
+          monthly.push({ name: month, revenue: amount, orders: 1, customers: 1 });
         }
       }
 
-      // Product data
+      // Products
       const existingProduct = products.find((p) => p.name === productName);
       if (existingProduct) {
         existingProduct.value += amount;
@@ -249,51 +199,34 @@ app.get('/proxy/notion', async (req, res) => {
         });
       }
 
-      // Orders (limit to 10 most recent)
+      // Orders (latest 10)
       if (orders.length < 10) {
         orders.push({
-          id: page.id || `#${(index+1).toString().padStart(4,"0")}`,
+          id: page.id || `#${(index + 1).toString().padStart(4, "0")}`,
           customer: customerName,
           amount: amount.toLocaleString("en-PH", { style: "currency", currency: "PHP" }),
           product: productName,
-          date: date ? new Date(date).toLocaleDateString("en-PH", { 
-            year: "numeric", 
-            month: "short", 
-            day: "numeric" 
-          }) : "-",
-          paymentMethod: paymentMethod,
+          date: date ? new Date(date).toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" }) : "-",
+          paymentMethod,
           status: "completed"
         });
       }
     });
 
-    console.log('📦 Processed data:', {
-      monthly: monthly.length,
-      products: products.length,
-      orders: orders.length
-    });
-
-    res.json({ 
-      success: true,
-      monthly, 
-      products, 
-      orders 
-    });
-    
+    res.json({ success: true, monthly, products, orders });
   } catch (error) {
-    console.error("❌ Error fetching Notion data:", error.response?.data || error.message);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to fetch data from Notion",
-      error: error.response?.data 
+      error: error.response?.data
     });
   }
 });
 
+// Vercel compatible
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n🎉 Proxy server running on http://localhost:${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/proxy/health`);
-  console.log(`🔍 Debug: http://localhost:${PORT}/proxy/debug`);
-  console.log(`🧪 Test: http://localhost:${PORT}/proxy/test-database`);
 });
+
+export default app; // ✅ importante para Vercel
